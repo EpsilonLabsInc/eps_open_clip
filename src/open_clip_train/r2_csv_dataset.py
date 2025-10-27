@@ -5,6 +5,7 @@ from functools import lru_cache
 
 import boto3
 import pandas as pd
+import torch
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.distributed import DistributedSampler
@@ -182,5 +183,13 @@ def get_r2_csv_dataset(args, preprocess_fn, is_train, epoch=0, tokenizer=None):
     class DataInfo:
         dataloader: DataLoader
         sampler: DistributedSampler = None
+        shared_epoch: None = None  # Not used for CSV dataset
 
-    return DataInfo(dataloader, sampler)
+        def set_epoch(self, epoch):
+            """Set epoch for distributed sampler"""
+            if self.sampler is not None and isinstance(
+                self.sampler, DistributedSampler
+            ):
+                self.sampler.set_epoch(epoch)
+
+    return DataInfo(dataloader=dataloader, sampler=sampler)
