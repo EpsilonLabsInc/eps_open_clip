@@ -20,6 +20,8 @@ from torch.utils.data.distributed import DistributedSampler
 from webdataset.filters import _shuffle
 from webdataset.tariterators import base_plus_ext, url_opener, tar_file_expander, valid_sample
 
+from open_clip_train.r2_csv_dataset import get_r2_csv_dataset as get_csv_dataset
+
 try:
     import horovod.torch as hvd
 except ImportError:
@@ -443,34 +445,34 @@ def get_wds_dataset(args, preprocess_img, is_train, epoch=0, floor=False, tokeni
     return DataInfo(dataloader=dataloader, shared_epoch=shared_epoch)
 
 
-def get_csv_dataset(args, preprocess_fn, is_train, epoch=0, tokenizer=None):
-    input_filename = args.train_data if is_train else args.val_data
-    assert input_filename
-    dataset = CsvDataset(
-        input_filename,
-        preprocess_fn,
-        img_key=args.csv_img_key,
-        caption_key=args.csv_caption_key,
-        sep=args.csv_separator,
-        tokenizer=tokenizer
-    )
-    num_samples = len(dataset)
-    sampler = DistributedSampler(dataset) if args.distributed and is_train else None
-    shuffle = is_train and sampler is None
+# def get_csv_dataset(args, preprocess_fn, is_train, epoch=0, tokenizer=None):
+#     input_filename = args.train_data if is_train else args.val_data
+#     assert input_filename
+#     dataset = CsvDataset(
+#         input_filename,
+#         preprocess_fn,
+#         img_key=args.csv_img_key,
+#         caption_key=args.csv_caption_key,
+#         sep=args.csv_separator,
+#         tokenizer=tokenizer
+#     )
+#     num_samples = len(dataset)
+#     sampler = DistributedSampler(dataset) if args.distributed and is_train else None
+#     shuffle = is_train and sampler is None
 
-    dataloader = DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        shuffle=shuffle,
-        num_workers=args.workers,
-        pin_memory=True,
-        sampler=sampler,
-        drop_last=is_train,
-    )
-    dataloader.num_samples = num_samples
-    dataloader.num_batches = len(dataloader)
+#     dataloader = DataLoader(
+#         dataset,
+#         batch_size=args.batch_size,
+#         shuffle=shuffle,
+#         num_workers=args.workers,
+#         pin_memory=True,
+#         sampler=sampler,
+#         drop_last=is_train,
+#     )
+#     dataloader.num_samples = num_samples
+#     dataloader.num_batches = len(dataloader)
 
-    return DataInfo(dataloader, sampler)
+#     return DataInfo(dataloader, sampler)
 
 
 class SyntheticDataset(Dataset):
