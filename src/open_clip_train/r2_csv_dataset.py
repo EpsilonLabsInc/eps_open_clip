@@ -140,8 +140,8 @@ def get_r2_csv_dataset(args, preprocess_fn, is_train, epoch=0, tokenizer=None):
     access_key = os.getenv("R2_ACCESS_KEY_ID")
     secret_key = os.getenv("R2_SECRET_ACCESS_KEY")
 
-    # Use cached version for better performance across epochs
-    dataset = CachedR2CsvDataset(
+    # Use non-cached version to avoid memory leaks
+    dataset = R2CsvDataset(
         input_filename,
         preprocess_fn,
         img_key=args.csv_img_key,
@@ -155,7 +155,6 @@ def get_r2_csv_dataset(args, preprocess_fn, is_train, epoch=0, tokenizer=None):
         aws_secret_access_key=secret_key,
         max_pool_connections=100,  # High connection pool for 12 workers
         prefetch_workers=8,
-        cache_size=20000,  # Cache 20k images (adjust based on RAM)
     )
 
     num_samples = len(dataset)
