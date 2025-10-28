@@ -1,7 +1,6 @@
 import io
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from functools import lru_cache
 
 import boto3
 import pandas as pd
@@ -71,6 +70,11 @@ class R2CsvDataset(Dataset):
 
         logging.debug(f"Done loading data. {len(self.images)} samples.")
 
+    def __del__(self):
+        """Cleanup resources when dataset is destroyed"""
+        if hasattr(self, "executor"):
+            self.executor.shutdown(wait=False)
+
     def __len__(self):
         return len(self.captions)
 
@@ -84,7 +88,12 @@ class R2CsvDataset(Dataset):
 
         try:
             response = self.s3_client.get_object(Bucket=self.bucket_name, Key=key)
-            img_bytes = response["Body"].read()
+            # Read the body and explicitly close the streaming connection
+            body = response["Body"]
+            try:
+                img_bytes = body.read()
+            finally:
+                body.close()  # Critical: Close the streaming body to release connection
             return Image.open(io.BytesIO(img_bytes))
         except Exception as e:
             logging.warning(f"Failed to load {key}: {e}")
@@ -93,28 +102,13 @@ class R2CsvDataset(Dataset):
 
     def __getitem__(self, idx):
         image = self._fetch_image_from_r2(str(self.images[idx]))
-        images = self.transforms(image)
-        texts = self.tokenize([str(self.captions[idx])])[0]
-        return images, texts
-
-
-class CachedR2CsvDataset(R2CsvDataset):
-    """
-    R2 dataset with LRU cache for frequently accessed images.
-    Good for multiple epochs or when some images are accessed multiple times.
-    """
-
-    def __init__(self, *args, cache_size=10000, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.cache_size = cache_size
-        # Create a cached version of the fetch function
-        self._cached_fetch = lru_cache(maxsize=cache_size)(self._fetch_image_from_r2)
-
-    def __getitem__(self, idx):
-        image = self._cached_fetch(str(self.images[idx]))
-        images = self.transforms(image)
-        texts = self.tokenize([str(self.captions[idx])])[0]
-        return images, texts
+        try:
+            images = self.transforms(image)
+            texts = self.tokenize([str(self.captions[idx])])[0]
+            return images, texts
+        finally:
+            # Close PIL image to free memory buffer
+            image.close()
 
 
 def get_r2_csv_dataset(args, preprocess_fn, is_train, epoch=0, tokenizer=None):
@@ -153,7 +147,7 @@ def get_r2_csv_dataset(args, preprocess_fn, is_train, epoch=0, tokenizer=None):
         endpoint_url=endpoint_url,
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
-        max_pool_connections=100,  # High connection pool for 12 workers
+        max_pool_connections=64,
         prefetch_workers=8,
     )
 
@@ -170,7 +164,7 @@ def get_r2_csv_dataset(args, preprocess_fn, is_train, epoch=0, tokenizer=None):
         sampler=sampler,
         drop_last=is_train,
         prefetch_factor=4,  # Prefetch 4 batches per worker
-        persistent_workers=True,  # Keep workers alive between epochs
+        persistent_workers=False,
     )
 
     dataloader.num_samples = num_samples
