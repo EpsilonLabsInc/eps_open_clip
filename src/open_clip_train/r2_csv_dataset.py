@@ -4,9 +4,7 @@ from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 
 import boto3
-import pyarrow as pa
 import pyarrow.csv as pa_csv
-import torch
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.distributed import DistributedSampler
@@ -68,10 +66,10 @@ class LimitedCacheTokenizer:
 
 
 class R2CsvDataset(Dataset):
-    """
-    Fast CSV dataset that reads images directly from Cloudflare R2. Uses
-    PyArrow for zero-copy, memory-mapped CSV access to prevent memory
-    duplication across dataloader workers.
+    """Fast CSV dataset that reads images directly from Cloudflare R2.
+
+    Uses PyArrow for zero-copy, memory-mapped CSV access to prevent
+    memory duplication across dataloader workers.
     """
 
     def __init__(
