@@ -133,7 +133,7 @@ class R2CsvDataset(Dataset):
         # Thread pool for prefetching
         self.executor = ThreadPoolExecutor(max_workers=prefetch_workers)
 
-        logging.debug(f"Done loading data. {len(self.images)} samples.")
+        logging.debug(f"Done loading data. {self._length} samples.")
 
     def __del__(self):
         """Cleanup resources when dataset is destroyed"""
