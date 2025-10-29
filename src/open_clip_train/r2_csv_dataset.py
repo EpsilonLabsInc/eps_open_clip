@@ -4,7 +4,7 @@ from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 
 import boto3
-import pyarrow.csv as pa_csv
+import pandas as pd
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.distributed import DistributedSampler
@@ -91,22 +91,10 @@ class R2CsvDataset(Dataset):
         prefetch_workers=4,
     ):
         logging.debug(f"Loading csv data from {input_filename}.")
+        df = pd.read_csv(input_filename, sep=sep)
 
-        # Load CSV using PyArrow for memory-mapped, zero-copy access
-        # This prevents memory duplication across worker processes
-        parse_options = pa_csv.ParseOptions(delimiter=sep)
-        read_options = pa_csv.ReadOptions(use_threads=True, block_size=2**20)
-
-        self.table = pa_csv.read_csv(
-            input_filename, parse_options=parse_options, read_options=read_options
-        )
-
-        # Store column references (not copies!)
-        # Arrow arrays are memory-mapped and shared across workers
-        self.images_col = self.table[img_key]
-        self.captions_col = self.table[caption_key]
-        self._length = len(self.table)
-
+        self.images = df[img_key].tolist()
+        self.captions = df[caption_key].tolist()
         self.transforms = transforms
         self.tokenize = tokenizer
 
@@ -133,7 +121,7 @@ class R2CsvDataset(Dataset):
         # Thread pool for prefetching
         self.executor = ThreadPoolExecutor(max_workers=prefetch_workers)
 
-        logging.debug(f"Done loading data. {self._length} samples.")
+        logging.debug(f"Done loading data. {len(self.images)} samples.")
 
     def __del__(self):
         """Cleanup resources when dataset is destroyed"""
@@ -141,7 +129,7 @@ class R2CsvDataset(Dataset):
             self.executor.shutdown(wait=False)
 
     def __len__(self):
-        return self._length
+        return len(self.captions)
 
     def _fetch_image_from_r2(self, filepath):
         """Fetch image bytes from R2"""
@@ -166,15 +154,10 @@ class R2CsvDataset(Dataset):
             return Image.new("RGB", (512, 512))
 
     def __getitem__(self, idx):
-        # Zero-copy access to Arrow columns - no refcount modification
-        # .as_py() only converts to Python string when needed
-        image_path = self.images_col[idx].as_py()
-        caption = self.captions_col[idx].as_py()
-
-        image = self._fetch_image_from_r2(str(image_path))
+        image = self._fetch_image_from_r2(str(self.images[idx]))
         try:
             images = self.transforms(image)
-            texts = self.tokenize([str(caption)])[0]
+            texts = self.tokenize([str(self.captions[idx])])[0]
             return images, texts
         finally:
             # Close PIL image to free memory buffer
