@@ -4,7 +4,8 @@ from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 
 import boto3
-import pandas as pd
+import pyarrow as pa
+import pyarrow.csv as pa_csv
 import torch
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
@@ -16,6 +17,7 @@ class LRUCache(OrderedDict):
     Efficient LRU cache using OrderedDict with O(1) operations.
     Automatically evicts least recently used items when max size is exceeded.
     """
+
     def __init__(self, maxsize=10000):
         super().__init__()
         self.maxsize = maxsize
@@ -45,6 +47,7 @@ class LimitedCacheTokenizer:
     memory leaks in multiprocessing scenarios. This wrapper replaces the cache with
     a proper LRU cache that keeps frequently used tokens while evicting rare ones.
     """
+
     def __init__(self, tokenizer, max_cache_size=10000):
         self.tokenizer = tokenizer
         self.max_cache_size = max_cache_size
@@ -52,7 +55,7 @@ class LimitedCacheTokenizer:
 
     def __call__(self, *args, **kwargs):
         # Lazy initialization: replace cache on first call in worker process
-        if not self._cache_replaced and hasattr(self.tokenizer, 'cache'):
+        if not self._cache_replaced and hasattr(self.tokenizer, "cache"):
             # Replace the unbounded dict with LRU cache
             original_cache = self.tokenizer.cache
             lru_cache = LRUCache(maxsize=self.max_cache_size)
@@ -66,11 +69,9 @@ class LimitedCacheTokenizer:
 
 class R2CsvDataset(Dataset):
     """
-    Fast CSV dataset that reads images directly from Cloudflare R2.
-    Much faster than rclone mount due to:
-    - Direct S3 API calls (no FUSE overhead)
-    - Parallel prefetching
-    - Connection pooling
+    Fast CSV dataset that reads images directly from Cloudflare R2. Uses
+    PyArrow for zero-copy, memory-mapped CSV access to prevent memory
+    duplication across dataloader workers.
     """
 
     def __init__(
@@ -92,10 +93,22 @@ class R2CsvDataset(Dataset):
         prefetch_workers=4,
     ):
         logging.debug(f"Loading csv data from {input_filename}.")
-        df = pd.read_csv(input_filename, sep=sep)
 
-        self.images = df[img_key].tolist()
-        self.captions = df[caption_key].tolist()
+        # Load CSV using PyArrow for memory-mapped, zero-copy access
+        # This prevents memory duplication across worker processes
+        parse_options = pa_csv.ParseOptions(delimiter=sep)
+        read_options = pa_csv.ReadOptions(use_threads=True, block_size=2**20)
+
+        self.table = pa_csv.read_csv(
+            input_filename, parse_options=parse_options, read_options=read_options
+        )
+
+        # Store column references (not copies!)
+        # Arrow arrays are memory-mapped and shared across workers
+        self.images_col = self.table[img_key]
+        self.captions_col = self.table[caption_key]
+        self._length = len(self.table)
+
         self.transforms = transforms
         self.tokenize = tokenizer
 
@@ -130,7 +143,7 @@ class R2CsvDataset(Dataset):
             self.executor.shutdown(wait=False)
 
     def __len__(self):
-        return len(self.captions)
+        return self._length
 
     def _fetch_image_from_r2(self, filepath):
         """Fetch image bytes from R2"""
@@ -155,10 +168,15 @@ class R2CsvDataset(Dataset):
             return Image.new("RGB", (512, 512))
 
     def __getitem__(self, idx):
-        image = self._fetch_image_from_r2(str(self.images[idx]))
+        # Zero-copy access to Arrow columns - no refcount modification
+        # .as_py() only converts to Python string when needed
+        image_path = self.images_col[idx].as_py()
+        caption = self.captions_col[idx].as_py()
+
+        image = self._fetch_image_from_r2(str(image_path))
         try:
             images = self.transforms(image)
-            texts = self.tokenize([str(self.captions[idx])])[0]
+            texts = self.tokenize([str(caption)])[0]
             return images, texts
         finally:
             # Close PIL image to free memory buffer
@@ -189,8 +207,7 @@ def get_r2_csv_dataset(args, preprocess_fn, is_train, epoch=0, tokenizer=None):
     secret_key = os.getenv("R2_SECRET_ACCESS_KEY")
 
     # Wrap tokenizer to prevent unbounded cache growth (memory leak fix)
-    #wrapped_tokenizer = LimitedCacheTokenizer(tokenizer, max_cache_size=10000)
-    wrapped_tokenizer = LimitedCacheTokenizer(tokenizer, max_cache_size=100)
+    wrapped_tokenizer = LimitedCacheTokenizer(tokenizer, max_cache_size=10000)
 
     # Use non-cached version to avoid memory leaks
     dataset = R2CsvDataset(
