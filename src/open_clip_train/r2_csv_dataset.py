@@ -1,5 +1,6 @@
 import io
 import logging
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 
 import boto3
@@ -8,6 +9,59 @@ import torch
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.distributed import DistributedSampler
+
+
+class LRUCache(OrderedDict):
+    """
+    Efficient LRU cache using OrderedDict with O(1) operations.
+    Automatically evicts least recently used items when max size is exceeded.
+    """
+    def __init__(self, maxsize=10000):
+        super().__init__()
+        self.maxsize = maxsize
+
+    def __getitem__(self, key):
+        # Move accessed item to end (most recently used)
+        value = super().__getitem__(key)
+        self.move_to_end(key)
+        return value
+
+    def __setitem__(self, key, value):
+        # Add/update item at end
+        if key in self:
+            self.move_to_end(key)
+        super().__setitem__(key, value)
+        # Evict least recently used if over capacity
+        if len(self) > self.maxsize:
+            oldest = next(iter(self))
+            del self[oldest]
+
+
+class LimitedCacheTokenizer:
+    """
+    Wrapper around a tokenizer to limit BPE cache growth and prevent memory leaks.
+
+    The underlying tokenizer's BPE cache grows unbounded during training, causing
+    memory leaks in multiprocessing scenarios. This wrapper replaces the cache with
+    a proper LRU cache that keeps frequently used tokens while evicting rare ones.
+    """
+    def __init__(self, tokenizer, max_cache_size=10000):
+        self.tokenizer = tokenizer
+        self.max_cache_size = max_cache_size
+        self._cache_replaced = False
+
+    def __call__(self, *args, **kwargs):
+        # Lazy initialization: replace cache on first call in worker process
+        if not self._cache_replaced and hasattr(self.tokenizer, 'cache'):
+            # Replace the unbounded dict with LRU cache
+            original_cache = self.tokenizer.cache
+            lru_cache = LRUCache(maxsize=self.max_cache_size)
+            # Pre-populate with existing entries (e.g., special tokens)
+            lru_cache.update(original_cache)
+            self.tokenizer.cache = lru_cache
+            self._cache_replaced = True
+
+        return self.tokenizer(*args, **kwargs)
 
 
 class R2CsvDataset(Dataset):
@@ -134,6 +188,9 @@ def get_r2_csv_dataset(args, preprocess_fn, is_train, epoch=0, tokenizer=None):
     access_key = os.getenv("R2_ACCESS_KEY_ID")
     secret_key = os.getenv("R2_SECRET_ACCESS_KEY")
 
+    # Wrap tokenizer to prevent unbounded cache growth (memory leak fix)
+    wrapped_tokenizer = LimitedCacheTokenizer(tokenizer, max_cache_size=10000)
+
     # Use non-cached version to avoid memory leaks
     dataset = R2CsvDataset(
         input_filename,
@@ -141,7 +198,7 @@ def get_r2_csv_dataset(args, preprocess_fn, is_train, epoch=0, tokenizer=None):
         img_key=args.csv_img_key,
         caption_key=args.csv_caption_key,
         sep=args.csv_separator,
-        tokenizer=tokenizer,
+        tokenizer=wrapped_tokenizer,
         bucket_name=getattr(args, "r2_bucket_name", "epsilonlabs-datasets-weur"),
         prefix=getattr(args, "r2_prefix", "png/512x512/"),
         endpoint_url=endpoint_url,
@@ -164,7 +221,7 @@ def get_r2_csv_dataset(args, preprocess_fn, is_train, epoch=0, tokenizer=None):
         sampler=sampler,
         drop_last=is_train,
         prefetch_factor=4,  # Prefetch 4 batches per worker
-        persistent_workers=False,
+        persistent_workers=True,  # Safe now with limited tokenizer cache
     )
 
     dataloader.num_samples = num_samples
