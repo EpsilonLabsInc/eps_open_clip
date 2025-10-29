@@ -189,7 +189,8 @@ def get_r2_csv_dataset(args, preprocess_fn, is_train, epoch=0, tokenizer=None):
     secret_key = os.getenv("R2_SECRET_ACCESS_KEY")
 
     # Wrap tokenizer to prevent unbounded cache growth (memory leak fix)
-    wrapped_tokenizer = LimitedCacheTokenizer(tokenizer, max_cache_size=10000)
+    #wrapped_tokenizer = LimitedCacheTokenizer(tokenizer, max_cache_size=10000)
+    wrapped_tokenizer = LimitedCacheTokenizer(tokenizer, max_cache_size=100)
 
     # Use non-cached version to avoid memory leaks
     dataset = R2CsvDataset(
