@@ -83,10 +83,10 @@ class R2CsvDataset(Dataset):
         transforms,
         img_key,
         caption_key,
+        bucket_name,
+        *,
         sep="\t",
         tokenizer=None,
-        bucket_name="epsilonlabs-datasets-weur",
-        prefix="png/512x512/",
         # R2 credentials - set these via environment variables or pass directly
         endpoint_url=None,
         aws_access_key_id=None,
@@ -105,7 +105,6 @@ class R2CsvDataset(Dataset):
 
         # R2 configuration
         self.bucket_name = bucket_name
-        self.prefix = prefix
 
         # Initialize S3 client with connection pooling
         from botocore.config import Config
@@ -140,9 +139,6 @@ class R2CsvDataset(Dataset):
         """Fetch image bytes from R2"""
         # Remove leading slash if present
         key = filepath.lstrip("/")
-        # Add prefix if not already present
-        if not key.startswith(self.prefix):
-            key = self.prefix + key
 
         try:
             response = self.s3_client.get_object(Bucket=self.bucket_name, Key=key)
@@ -186,10 +182,10 @@ class R2CsvIterableDataset(IterableDataset):
         transforms,
         img_key,
         caption_key,
+        bucket_name,
+        *,
         sep="\t",
         tokenizer=None,
-        bucket_name="epsilonlabs-datasets-weur",
-        prefix="png/512x512/",
         # R2 credentials
         endpoint_url=None,
         aws_access_key_id=None,
@@ -210,7 +206,6 @@ class R2CsvIterableDataset(IterableDataset):
 
         # R2 configuration
         self.bucket_name = bucket_name
-        self.prefix = prefix
         self.endpoint_url = endpoint_url
         self.aws_access_key_id = aws_access_key_id
         self.aws_secret_access_key = aws_secret_access_key
@@ -228,7 +223,7 @@ class R2CsvIterableDataset(IterableDataset):
 
     def _init_s3_client(self):
         """Initialize S3 client lazily in worker process (not in main process)"""
-        if not hasattr(self, 's3_client'):
+        if not hasattr(self, "s3_client"):
             from botocore.config import Config
 
             config = Config(
@@ -253,9 +248,6 @@ class R2CsvIterableDataset(IterableDataset):
 
         # Remove leading slash if present
         key = filepath.lstrip("/")
-        # Add prefix if not already present
-        if not key.startswith(self.prefix):
-            key = self.prefix + key
 
         try:
             response = self.s3_client.get_object(Bucket=self.bucket_name, Key=key)
@@ -317,7 +309,7 @@ class R2CsvIterableDataset(IterableDataset):
         # Step 4: Read ONLY this worker's portion using csv.DictReader
         # This avoids materializing large skiprows ranges and memory leaks from pandas chunking
         try:
-            with open(self.input_filename, 'r', newline='') as csvfile:
+            with open(self.input_filename, "r", newline="") as csvfile:
                 # Detect delimiter from first line if using comma
                 reader = csv.DictReader(csvfile, delimiter=self.sep)
 
@@ -385,10 +377,9 @@ def get_r2_csv_dataset(args, preprocess_fn, is_train, epoch=0, tokenizer=None):
         preprocess_fn,
         img_key=args.csv_img_key,
         caption_key=args.csv_caption_key,
+        bucket_name=getattr(args, "r2_streaming_bucket"),
         sep=args.csv_separator,
         tokenizer=wrapped_tokenizer,
-        bucket_name=getattr(args, "r2_bucket_name", "epsilonlabs-datasets-weur"),
-        prefix=getattr(args, "r2_prefix", "png/512x512/"),
         endpoint_url=endpoint_url,
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
