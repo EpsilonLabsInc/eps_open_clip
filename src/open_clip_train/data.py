@@ -733,6 +733,32 @@ def get_data(args, preprocess_fns, epoch=0, tokenizer=None):
         data["val"] = get_dataset_fn(args.val_data, args.dataset_type)(
             args, preprocess_val, is_train=False, tokenizer=tokenizer)
 
+    # Handle multiple named validation datasets
+    if args.val_data_list:
+        # Parse format: "name1:path1,name2:path2,..."
+        val_datasets = args.val_data_list.split(',')
+        for val_spec in val_datasets:
+            val_spec = val_spec.strip()
+            if ':' not in val_spec:
+                raise ValueError(
+                    f"Invalid --val-data-list format. Expected 'name:path' but got '{val_spec}'. "
+                    "Example: --val-data-list 'coco:/data/coco.csv,flickr:/data/flickr.csv'"
+                )
+            name, path = val_spec.split(':', 1)
+            name = name.strip()
+            path = path.strip()
+
+            # Create a temporary args object with the specific val_data path
+            import copy
+            temp_args = copy.copy(args)
+            temp_args.val_data = path
+
+            # Determine dataset type for this specific file
+            dataset_fn = get_dataset_fn(path, args.dataset_type)
+            data[f"val_{name}"] = dataset_fn(
+                temp_args, preprocess_val, is_train=False, tokenizer=tokenizer
+            )
+
     if args.imagenet_val is not None:
         data["imagenet-val"] = get_imagenet(args, preprocess_fns, "val")
 
