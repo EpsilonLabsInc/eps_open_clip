@@ -479,6 +479,18 @@ def parse_args(args):
         type=str,
         help='A string to specify a specific distributed loss implementation.'
     )
+    parser.add_argument(
+        "--r2-streaming",
+        default=False,
+        action="store_true",
+        help="Use R2 streaming dataset for CSV data (reads images directly from Cloudflare R2)."
+    )
+    parser.add_argument(
+        "--r2-streaming-bucket",
+        type=str,
+        default="epsilonlabs-datasets-weur",
+        help="R2 bucket name to stream from when using --r2-streaming."
+    )
 
     args = parser.parse_args(args)
 
