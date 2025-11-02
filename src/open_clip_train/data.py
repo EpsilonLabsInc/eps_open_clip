@@ -149,8 +149,14 @@ class CsvIterableDataset(IterableDataset):
 
                 processed_count = 0
                 for row in rows_to_process:
-                    # Load image from local file
-                    image = Image.open(str(row[self.img_key]))
+                    # Load image from local file with error handling
+                    try:
+                        image = Image.open(str(row[self.img_key]))
+                    except Exception as e:
+                        logging.warning(f"Failed to load {row[self.img_key]}: {e}")
+                        # Skip this example entirely
+                        continue
+
                     try:
                         # Transform and tokenize
                         images = self.transforms(image)
