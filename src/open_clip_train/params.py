@@ -480,6 +480,12 @@ def parse_args(args):
         help='A string to specify a specific distributed loss implementation.'
     )
     parser.add_argument(
+        "--csv-iterable",
+        default=False,
+        action="store_true",
+        help="Use iterable dataset for local CSV files to avoid memory explosion with multiple workers."
+    )
+    parser.add_argument(
         "--r2-streaming",
         default=False,
         action="store_true",
