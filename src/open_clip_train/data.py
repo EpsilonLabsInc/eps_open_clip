@@ -1,4 +1,6 @@
 import ast
+import csv
+import gc
 import json
 import logging
 import math
@@ -7,11 +9,13 @@ import random
 import sys
 import braceexpand
 from dataclasses import dataclass
+from itertools import islice
 from multiprocessing import Value
 
 import numpy as np
 import pandas as pd
 import torch
+import torch.distributed as dist
 import torchvision.datasets as datasets
 import webdataset as wds
 from PIL import Image
@@ -20,7 +24,7 @@ from torch.utils.data.distributed import DistributedSampler
 from webdataset.filters import _shuffle
 from webdataset.tariterators import base_plus_ext, url_opener, tar_file_expander, valid_sample
 
-from open_clip_train.r2_csv_dataset import get_r2_csv_dataset
+from open_clip_train.r2_csv_dataset import get_r2_csv_dataset, LimitedCacheTokenizer
 
 
 try:
@@ -48,6 +52,133 @@ class CsvDataset(Dataset):
         images = self.transforms(Image.open(str(self.images[idx])))
         texts = self.tokenize([str(self.captions[idx])])[0]
         return images, texts
+
+
+class CsvIterableDataset(IterableDataset):
+    """Memory-efficient CSV dataset that avoids copy-on-write memory duplication.
+
+    Each DataLoader worker independently reads only its assigned portion of the CSV,
+    preventing the memory explosion problem when using multiple workers with large CSVs.
+
+    Works with distributed training by splitting data across:
+    1. DDP ranks (GPU processes)
+    2. DataLoader workers within each rank
+    """
+
+    def __init__(
+        self,
+        input_filename,
+        transforms,
+        img_key,
+        caption_key,
+        *,
+        sep="\t",
+        tokenizer=None,
+        chunksize=1000,
+    ):
+        self.input_filename = input_filename
+        self.transforms = transforms
+        self.img_key = img_key
+        self.caption_key = caption_key
+        self.sep = sep
+        self.tokenize = tokenizer
+        self.chunksize = chunksize
+
+        # Expand user home directory (~) in path
+        self.input_filename = os.path.expanduser(self.input_filename)
+
+        # Count total rows without loading full CSV into memory
+        logging.debug(f"Counting rows in {self.input_filename}...")
+        with open(self.input_filename) as f:
+            self.num_samples = sum(1 for _ in f) - 1  # -1 for header
+        logging.debug(f"Found {self.num_samples} samples in CSV.")
+
+    def __iter__(self):
+        """
+        Each worker reads only its assigned slice of the CSV file.
+        This prevents copy-on-write memory duplication across workers.
+
+        Uses csv.DictReader for true line-by-line streaming without materializing
+        large skiprows ranges or holding chunk iterators in memory.
+        """
+        # Step 1: Determine DDP rank (which GPU process we're in)
+        if dist.is_available() and dist.is_initialized():
+            rank = dist.get_rank()
+            world_size = dist.get_world_size()
+        else:
+            rank = 0
+            world_size = 1
+
+        # Step 2: Determine worker ID within this rank
+        worker_info = get_worker_info()
+        if worker_info is None:
+            # Single-process data loading
+            num_workers = 1
+            worker_id = 0
+        else:
+            num_workers = worker_info.num_workers
+            worker_id = worker_info.id
+
+        # Step 3: Calculate this worker's global ID and slice
+        # Example: 8 GPUs × 8 workers = 64 total workers
+        total_workers = world_size * num_workers
+        global_worker_id = rank * num_workers + worker_id
+
+        # Each worker gets approximately num_samples / total_workers rows
+        per_worker = int(math.ceil(self.num_samples / total_workers))
+        start_idx = global_worker_id * per_worker
+        end_idx = min(start_idx + per_worker, self.num_samples)
+        num_rows_to_read = end_idx - start_idx
+
+        logging.debug(
+            f"Rank {rank}/{world_size}, Worker {worker_id}/{num_workers} "
+            f"(global {global_worker_id}/{total_workers}): "
+            f"processing rows {start_idx}-{end_idx} ({num_rows_to_read} rows)"
+        )
+
+        # Step 4: Read ONLY this worker's portion using csv.DictReader
+        # This avoids materializing large skiprows ranges and memory leaks from pandas chunking
+        try:
+            with open(self.input_filename, "r", newline="") as csvfile:
+                # Detect delimiter from first line if using comma
+                reader = csv.DictReader(csvfile, delimiter=self.sep)
+
+                # Use islice to efficiently skip to our start position and read only our slice
+                # This is memory-efficient: doesn't materialize a huge range object
+                rows_to_process = islice(reader, start_idx, end_idx)
+
+                processed_count = 0
+                for row in rows_to_process:
+                    # Load image from local file with error handling
+                    try:
+                        image = Image.open(str(row[self.img_key]))
+                    except Exception as e:
+                        logging.warning(f"Failed to load {row[self.img_key]}: {e}")
+                        # Skip this example entirely
+                        continue
+
+                    try:
+                        # Transform and tokenize
+                        images = self.transforms(image)
+                        texts = self.tokenize([str(row[self.caption_key])])[0]
+                        yield images, texts
+                    finally:
+                        # Close PIL image to free memory buffer
+                        image.close()
+
+                    processed_count += 1
+
+                    # Periodic garbage collection to release any lingering references
+                    if processed_count % self.chunksize == 0:
+                        gc.collect()
+
+        except Exception as e:
+            logging.error(f"Worker {global_worker_id} encountered error: {e}")
+            raise
+
+    def __len__(self):
+        """Return total number of samples across all workers"""
+        return self.num_samples
 
 
 class SharedEpoch:
@@ -453,31 +584,71 @@ def get_csv_dataset(args, preprocess_fn, is_train, epoch=0, tokenizer=None):
 
     input_filename = args.train_data if is_train else args.val_data
     assert input_filename
-    dataset = CsvDataset(
-        input_filename,
-        preprocess_fn,
-        img_key=args.csv_img_key,
-        caption_key=args.csv_caption_key,
-        sep=args.csv_separator,
-        tokenizer=tokenizer
-    )
-    num_samples = len(dataset)
-    sampler = DistributedSampler(dataset) if args.distributed and is_train else None
-    shuffle = is_train and sampler is None
 
-    dataloader = DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        shuffle=shuffle,
-        num_workers=args.workers,
-        pin_memory=True,
-        sampler=sampler,
-        drop_last=is_train,
-    )
-    dataloader.num_samples = num_samples
-    dataloader.num_batches = len(dataloader)
+    # Use iterable dataset to avoid memory explosion with multiple workers
+    use_iterable = getattr(args, 'csv_iterable', False)
 
-    return DataInfo(dataloader, sampler)
+    if use_iterable:
+        # Wrap tokenizer to prevent unbounded cache growth (memory leak fix)
+        wrapped_tokenizer = LimitedCacheTokenizer(tokenizer, max_cache_size=100)
+
+        # Use IterableDataset to avoid memory duplication across workers
+        dataset = CsvIterableDataset(
+            input_filename,
+            preprocess_fn,
+            img_key=args.csv_img_key,
+            caption_key=args.csv_caption_key,
+            sep=args.csv_separator,
+            tokenizer=wrapped_tokenizer,
+            chunksize=1000,  # Process CSV in 1000-row chunks for memory efficiency
+        )
+
+        num_samples = len(dataset)
+
+        # IterableDataset handles distributed splitting internally, no sampler needed
+        dataloader = DataLoader(
+            dataset,
+            batch_size=args.batch_size,
+            shuffle=False,  # IterableDataset doesn't support shuffle parameter
+            num_workers=args.workers,
+            pin_memory=True,
+            drop_last=is_train,
+            prefetch_factor=2,  # Reduced from default to lower prefetch memory usage
+            persistent_workers=False,  # Restart workers to clear accumulated memory each epoch
+        )
+
+        dataloader.num_samples = num_samples
+        # Calculate num_batches manually (can't use len(dataloader) with IterableDataset)
+        dataloader.num_batches = num_samples // (args.batch_size * args.world_size)
+
+        return DataInfo(dataloader=dataloader, sampler=None)
+    else:
+        # Original implementation: loads entire CSV into memory
+        dataset = CsvDataset(
+            input_filename,
+            preprocess_fn,
+            img_key=args.csv_img_key,
+            caption_key=args.csv_caption_key,
+            sep=args.csv_separator,
+            tokenizer=tokenizer
+        )
+        num_samples = len(dataset)
+        sampler = DistributedSampler(dataset) if args.distributed and is_train else None
+        shuffle = is_train and sampler is None
+
+        dataloader = DataLoader(
+            dataset,
+            batch_size=args.batch_size,
+            shuffle=shuffle,
+            num_workers=args.workers,
+            pin_memory=True,
+            sampler=sampler,
+            drop_last=is_train,
+        )
+        dataloader.num_samples = num_samples
+        dataloader.num_batches = len(dataloader)
+
+        return DataInfo(dataloader, sampler)
 
 
 class SyntheticDataset(Dataset):
@@ -561,6 +732,32 @@ def get_data(args, preprocess_fns, epoch=0, tokenizer=None):
     if args.val_data:
         data["val"] = get_dataset_fn(args.val_data, args.dataset_type)(
             args, preprocess_val, is_train=False, tokenizer=tokenizer)
+
+    # Handle multiple named validation datasets
+    if args.val_data_list:
+        # Parse format: "name1:path1,name2:path2,..."
+        val_datasets = args.val_data_list.split(',')
+        for val_spec in val_datasets:
+            val_spec = val_spec.strip()
+            if ':' not in val_spec:
+                raise ValueError(
+                    f"Invalid --val-data-list format. Expected 'name:path' but got '{val_spec}'. "
+                    "Example: --val-data-list 'coco:/data/coco.csv,flickr:/data/flickr.csv'"
+                )
+            name, path = val_spec.split(':', 1)
+            name = name.strip()
+            path = path.strip()
+
+            # Create a temporary args object with the specific val_data path
+            import copy
+            temp_args = copy.copy(args)
+            temp_args.val_data = path
+
+            # Determine dataset type for this specific file
+            dataset_fn = get_dataset_fn(path, args.dataset_type)
+            data[f"val_{name}"] = dataset_fn(
+                temp_args, preprocess_val, is_train=False, tokenizer=tokenizer
+            )
 
     if args.imagenet_val is not None:
         data["imagenet-val"] = get_imagenet(args, preprocess_fns, "val")

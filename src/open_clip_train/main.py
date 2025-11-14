@@ -436,6 +436,12 @@ def main(args):
         args.train_sz = data["train"].dataloader.num_samples
         if args.val_data is not None:
             args.val_sz = data["val"].dataloader.num_samples
+        # Handle multiple validation datasets
+        if args.val_data_list is not None:
+            val_dataset_keys = [k for k in data.keys() if k.startswith('val_')]
+            for val_key in val_dataset_keys:
+                dataset_name = val_key[4:]  # Remove 'val_' prefix
+                setattr(args, f'val_{dataset_name}_sz', data[val_key].dataloader.num_samples)
         # you will have to configure this for your project!
         wandb.init(
             project=args.wandb_project_name,
@@ -483,7 +489,9 @@ def main(args):
         train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist_model, args, tb_writer=writer)
         completed_epoch = epoch + 1
 
-        if any(v in data for v in ('val', 'imagenet-val', 'imagenet-v2')):
+        # Check if any validation datasets exist (val, val_*, imagenet-val, imagenet-v2)
+        val_keys = [k for k in data.keys() if k == 'val' or k.startswith('val_') or k in ('imagenet-val', 'imagenet-v2')]
+        if val_keys:
             evaluate(model, data, completed_epoch, args, tb_writer=writer, tokenizer=tokenizer)
 
         # Saving checkpoints.

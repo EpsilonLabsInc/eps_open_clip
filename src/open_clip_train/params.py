@@ -480,6 +480,12 @@ def parse_args(args):
         help='A string to specify a specific distributed loss implementation.'
     )
     parser.add_argument(
+        "--csv-iterable",
+        default=False,
+        action="store_true",
+        help="Use iterable dataset for local CSV files to avoid memory explosion with multiple workers."
+    )
+    parser.add_argument(
         "--r2-streaming",
         default=False,
         action="store_true",
@@ -490,6 +496,12 @@ def parse_args(args):
         type=str,
         default="epsilonlabs-datasets-weur",
         help="R2 bucket name to stream from when using --r2-streaming."
+    )
+    parser.add_argument(
+        "--val-data-list",
+        type=str,
+        default=None,
+        help="Multiple validation datasets with custom names. Format: 'name1:path1,name2:path2'. Example: 'coco:/data/coco.csv,flickr:/data/flickr.csv'",
     )
 
     args = parser.parse_args(args)
