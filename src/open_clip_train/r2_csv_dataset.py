@@ -260,8 +260,8 @@ class R2CsvIterableDataset(IterableDataset):
             return Image.open(io.BytesIO(img_bytes))
         except Exception as e:
             logging.warning(f"Failed to load {key}: {e}")
-            # Return None to signal failure, caller will skip this example
-            return None
+            # Return a blank image as fallback
+            return Image.new("RGB", (512, 512))
 
     def __iter__(self):
         """
