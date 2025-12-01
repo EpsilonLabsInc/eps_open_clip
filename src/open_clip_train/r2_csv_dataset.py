@@ -186,6 +186,7 @@ class R2CsvIterableDataset(IterableDataset):
         *,
         sep="\t",
         tokenizer=None,
+        return_metadata=False,
         # R2 credentials
         endpoint_url=None,
         aws_access_key_id=None,
@@ -202,6 +203,7 @@ class R2CsvIterableDataset(IterableDataset):
         self.caption_key = caption_key
         self.sep = sep
         self.tokenize = tokenizer
+        self.return_metadata = return_metadata
         self.chunksize = chunksize
 
         # R2 configuration
@@ -329,7 +331,17 @@ class R2CsvIterableDataset(IterableDataset):
                         # Transform and tokenize
                         images = self.transforms(image)
                         texts = self.tokenize([str(row[self.caption_key])])[0]
-                        yield images, texts
+
+                        if self.return_metadata:
+                            # Return metadata dict for scoring scripts
+                            metadata = {
+                                'filepath': str(row[self.img_key]),
+                                'title': str(row[self.caption_key]),
+                            }
+                            yield (images, texts), metadata
+                        else:
+                            # Default: return just tensors (backward compatible with training)
+                            yield images, texts
                     finally:
                         # Close PIL image to free memory buffer
                         image.close()
