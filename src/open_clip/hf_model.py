@@ -146,7 +146,12 @@ class HFTextEncoder(nn.Module):
                 self.transformer = create_func(model_args)
                 self.transformer = self.transformer.encoder
             else:
-                self.transformer = create_func(model_args, add_pooling_layer=uses_transformer_pooler)
+                # Try to create with add_pooling_layer parameter, fall back without it if not supported
+                try:
+                    self.transformer = create_func(model_args, add_pooling_layer=uses_transformer_pooler)
+                except TypeError:
+                    # Some models (e.g., Qwen3) don't support add_pooling_layer parameter
+                    self.transformer = create_func(model_args)
         else:
             self.config = config
             self.transformer = AutoModel.from_config(config)
