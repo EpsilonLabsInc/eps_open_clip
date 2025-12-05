@@ -1,0 +1,14 @@
+{
+    "embed_dim": 384,
+    "vision_cfg": {
+        "image_size": 224,
+        "layers": 12,
+        "width": 384,
+        "patch_size": 32
+    },
+    "text_cfg": {
+        "hf_model_name": "Qwen/Qwen3-Embedding-8B",
+        "hf_tokenizer_name": "Qwen/Qwen3-Embedding-8B",
+        "hf_pooler_type": "last_token_pooler"
+    }
+}

@@ -93,6 +93,27 @@ class ClsLastHiddenStatePooler(nn.Module):
         return x.last_hidden_state[:, self.cls_token_position, :]
 
 
+@register_pooler
+class LastTokenPooler(nn.Module):
+    """Last token pooling
+    Used by models like Qwen3-Embedding which use the last token's hidden state.
+    Handles both left and right padding by finding the actual last token position.
+    """
+
+    def forward(self, x: BaseModelOutput, attention_mask: TensorType):
+        # Find the position of the last valid token for each sequence
+        # attention_mask is 1 for valid tokens, 0 for padding
+        sequence_lengths = attention_mask.sum(dim=1) - 1  # -1 to get last token index
+        batch_size = x.last_hidden_state.shape[0]
+
+        # Gather the last token hidden state for each sequence in the batch
+        last_hidden_states = x.last_hidden_state[
+            torch.arange(batch_size, device=x.last_hidden_state.device),
+            sequence_lengths
+        ]
+        return last_hidden_states
+
+
 class HFTextEncoder(nn.Module):
     """HuggingFace model adapter"""
     output_tokens: torch.jit.Final[bool]

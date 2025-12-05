@@ -64,4 +64,15 @@ arch_dict = {
         },
         "pooler": "cls_pooler",
     },
+    # https://huggingface.co/Qwen/Qwen3-Embedding-8B
+    "qwen2": {
+        "config_names": {
+            "context_length": "max_position_embeddings",
+            "vocab_size": "vocab_size",
+            "width": "hidden_size",
+            "heads": "num_attention_heads",
+            "layers": "num_hidden_layers",
+        },
+        "pooler": "last_token_pooler",
+    },
 }
