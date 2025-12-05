@@ -178,7 +178,10 @@ class HFTextEncoder(nn.Module):
             )
 
     def forward(self, x: TensorType):
-        attn_mask = (x != self.config.pad_token_id).long()
+        # Create attention mask based on pad_token_id
+        # If pad_token_id is not set, use 0 as the default pad token
+        pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else 0
+        attn_mask = (x != pad_token_id).long()
         out = self.transformer(input_ids=x, attention_mask=attn_mask)
         pooled_out = self.pooler(out, attn_mask)
         projected = self.proj(pooled_out)
