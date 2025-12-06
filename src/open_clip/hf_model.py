@@ -158,6 +158,18 @@ class HFTextEncoder(nn.Module):
         self.vocab_size = getattr(self.config, 'vocab_size', 0)
         self.context_length = getattr(self.config, 'max_position_embeddings', 0)
 
+        # Handle pad_token_id for attention mask creation
+        # Some models (e.g., Qwen3) have pad_token_id in tokenizer but not in config
+        self.pad_token_id = self.config.pad_token_id
+        if self.pad_token_id is None:
+            # Try to get from tokenizer if available
+            try:
+                tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
+                self.pad_token_id = tokenizer.pad_token_id
+            except:
+                # If tokenizer loading fails, we'll handle it in forward
+                pass
+
         self.pooler = _POOLERS[pooler_type]()
 
         d_model = getattr(self.config, arch_dict[self.config.model_type]["config_names"]["width"])
@@ -174,7 +186,12 @@ class HFTextEncoder(nn.Module):
             )
 
     def forward(self, x: TensorType):
-        attn_mask = (x != self.config.pad_token_id).long()
+        # Create attention mask
+        if self.pad_token_id is not None:
+            attn_mask = (x != self.pad_token_id).long()
+        else:
+            # If no pad_token_id available, assume all tokens are valid (no padding)
+            attn_mask = torch.ones_like(x, dtype=torch.long)
         out = self.transformer(input_ids=x, attention_mask=attn_mask)
         pooled_out = self.pooler(out, attn_mask)
         projected = self.proj(pooled_out)
