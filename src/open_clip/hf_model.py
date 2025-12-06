@@ -162,16 +162,16 @@ class HFTextEncoder(nn.Module):
         self.vocab_size = getattr(self.config, 'vocab_size', 0)
         self.context_length = getattr(self.config, 'max_position_embeddings', 0)
 
-        # Get pad_token_id from config, or fall back to tokenizer if not available
+        # Get pad_token_id from config or tokenizer. 
         # This is needed for models like Qwen3 where config.pad_token_id is None
-        if self.config.pad_token_id is not None:
-            self.pad_token_id = self.config.pad_token_id
-        else:
-            try:
-                tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
-                self.pad_token_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
-            except Exception:
-                # If we can't load the tokenizer, default to 0
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
+            self.pad_token_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
+        except Exception:
+            if self.config.pad_token_id is not None:
+                self.pad_token_id = self.config.pad_token_id
+            else:
+                # If we can't load the tokenizer or config.pad_token_id is None, default to 0
                 self.pad_token_id = 0
 
         self.pooler = _POOLERS[pooler_type]()
