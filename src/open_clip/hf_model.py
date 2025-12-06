@@ -93,6 +93,23 @@ class ClsLastHiddenStatePooler(nn.Module):
         return x.last_hidden_state[:, self.cls_token_position, :]
 
 
+@register_pooler
+class LastTokenPooler(nn.Module):
+    """Last token pooling (EOS token)
+    Used by models like Qwen3-Embedding that pool using the last non-padding token.
+    Handles both left and right padding correctly.
+    """
+
+    def forward(self, x: BaseModelOutput, attention_mask: TensorType):
+        left_padding = (attention_mask[:, -1].sum() == attention_mask.shape[0])
+        if left_padding:
+            return x.last_hidden_state[:, -1]
+        else:
+            sequence_lengths = attention_mask.sum(dim=1) - 1
+            batch_size = x.last_hidden_state.shape[0]
+            return x.last_hidden_state[torch.arange(batch_size, device=x.last_hidden_state.device), sequence_lengths]
+
+
 class HFTextEncoder(nn.Module):
     """HuggingFace model adapter"""
     output_tokens: torch.jit.Final[bool]

@@ -1,0 +1,19 @@
+{
+    "embed_dim": 512,
+    "quick_gelu": true,
+    "vision_cfg": {
+        "image_size": 224,
+        "layers": 12,
+        "width": 384,
+        "patch_size": 32
+    },
+    "text_cfg": {
+        "hf_model_name": "Qwen/Qwen3-Embedding-8B",
+        "hf_tokenizer_name": "Qwen/Qwen3-Embedding-8B",
+        "hf_pooler_type": "last_token_pooler",
+        "hf_proj_type": "linear",
+        "tokenizer_kwargs": {
+            "padding_side": "left"
+        }
+    }
+}
