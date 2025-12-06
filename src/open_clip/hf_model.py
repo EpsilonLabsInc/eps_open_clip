@@ -162,6 +162,9 @@ class HFTextEncoder(nn.Module):
         # Some models (e.g., Qwen3) have pad_token_id in tokenizer but not in config
         self.pad_token_id = self.config.pad_token_id
         if self.pad_token_id is None:
+            print(f"Warning: pad_token_id is not set in config for model {model_name_or_path}")
+            self.pad_token_id = 0
+            """
             # Try to get from tokenizer if available
             try:
                 tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
@@ -169,6 +172,7 @@ class HFTextEncoder(nn.Module):
             except:
                 # If tokenizer loading fails, we'll handle it in forward
                 pass
+            """
 
         self.pooler = _POOLERS[pooler_type]()
 
